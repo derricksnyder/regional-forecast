@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NWS Regional 6-Day Forecast Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8; /* Light gray background */
+        }
+        .card {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s ease-in-out;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #3b82f6; /* Blue spinner */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .weather-icon {
+            width: 64px; /* Adjust size as needed */
+            height: 64px;
+            object-fit: contain;
+        }
+        .error-card {
+            background-color: #fee2e2; /* Red-ish background */
+            border: 1px solid #ef4444; /* Red border */
+            color: #b91c1c; /* Darker red text */
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .regional-forecast-card {
+            grid-column: 1 / -1; /* Span all columns in the grid */
+            background-color: #e0f2f7; /* Light blue background */
+            border: 2px solid #0288d1; /* Darker blue border */
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4">
+
+    <div class="container mx-auto p-6 bg-blue-600 text-white rounded-lg shadow-lg mb-8 max-w-6xl text-center">
+        <h1 class="text-3xl font-bold mb-2">NWS Regional 6-Day Forecast Dashboard</h1>
+        <p class="text-lg">Averaged weather outlook for key locations in the NWS Paducah area.</p>
+    </div>
+
+    <div id="loadingIndicator" class="flex flex-col items-center justify-center p-8">
+        <div class="loading-spinner"></div>
+        <p class="mt-4 text-gray-700 text-lg">Fetching regional forecast data...</p>
+    </div>
+
+    <div id="errorMessage" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative max-w-4xl w-full" role="alert">
+        <strong class="font-bold">Error!</strong>
+        <span class="block sm:inline" id="errorText"></span>
+    </div>
+
+    <div id="forecastContainer" class="hidden w-full max-w-6xl">
+        <div id="forecastGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- Configuration: Locations for Averaging ---
+            const locations = [
+                { name: 'Marion, IL', lat: 37.730278, lon: -88.928889 },
+                { name: 'Paducah, KY', lat: 37.0848, lon: -88.5980 },
+                { name: 'Owensboro, KY', lat: 37.757778, lon: -87.118333 },
+                { name: 'Evansville, IN', lat: 37.977222, lon: -87.550552 },
+                { name: 'Poplar Bluff, MO', lat: 36.763333, lon: -90.413611 },
+                { name: 'Cape Girardeau, MO', lat: 37.309444, lon: -89.538889 },
+                { name: 'Mount Vernon, IL', lat: 38.317222, lon: -88.917222 }
+            ];
+
+            const loadingIndicator = document.getElementById('loadingIndicator');
+            const errorMessage = document.getElementById('errorMessage');
+            const errorText = document.getElementById('errorText');
+            const forecastContainer = document.getElementById('forecastContainer');
+            const forecastGrid = document.getElementById('forecastGrid');
+
+            // Store all parsed forecast data from each location for regional averaging
+            const allLocationsForecastData = [];
+
+            // --- US Federal Holidays (fixed and floating) ---
+            const US_FEDERAL_HOLIDAYS = {
+                // Fixed Date Holidays (Month is 0-indexed)
+                '01-01': 'New Year\'s Day',
+                '06-19': 'Juneteenth National Independence Day',
+                '07-04': 'Independence Day',
+                '11-11': 'Veterans Day',
+                '12-25': 'Christmas Day',
+
+                // Floating Holidays (Rule: { month: 0-indexed, dayOfWeek: 0=Sunday, 6=Saturday, week: 1=1st, 2=2nd, etc. })
+                // Martin Luther King, Jr.'s Birthday: 3rd Monday in January
+                'mlk': { month: 0, dayOfWeek: 1, week: 3, name: 'Martin Luther King, Jr.\'s Birthday' },
+                // Washington's Birthday (Presidents' Day): 3rd Monday in February
+                'presidents': { month: 1, dayOfWeek: 1, week: 3, name: 'Washington\'s Birthday' },
+                // Memorial Day: Last Monday in May
+                'memorial': { month: 4, dayOfWeek: 1, week: 'last', name: 'Memorial Day' },
+                // Labor Day: 1st Monday in September
+                'labor': { month: 8, dayOfWeek: 1, week: 1, name: 'Labor Day' },
+                // Columbus Day: 2nd Monday in October
+                'columbus': { month: 9, dayOfWeek: 1, week: 2, name: 'Columbus Day' },
+                // Thanksgiving Day: 4th Thursday in November
+                'thanksgiving': { month: 10, dayOfWeek: 4, week: 4, name: 'Thanksgiving Day' }
+            };
+
+            /**
+             * Checks if a given date is a U.S. federal holiday.
+             * @param {Date} date The date object to check.
+             * @returns {string|null} The name of the holiday if it's a federal holiday, otherwise null.
+             */
+            const isFederalHoliday = (date) => {
+                const month = date.getMonth();
+                const day = date.getDate();
+                const year = date.getFullYear();
+                const dayOfWeek = date.getDay(); // 0=Sunday, 6=Saturday
+
+                // Check fixed date holidays
+                const fixedDateKey = `${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+                if (US_FEDERAL_HOLIDAYS[fixedDateKey]) {
+                    // Handle observed holidays for weekends
+                    if (dayOfWeek === 6) { // Saturday holiday observed on Friday
+                        const observedDate = new Date(date);
+                        observedDate.setDate(date.getDate() - 1);
+                        if (observedDate.getDate() === day - 1) return US_FEDERAL_HOLIDAYS[fixedDateKey];
+                    } else if (dayOfWeek === 0) { // Sunday holiday observed on Monday
+                        const observedDate = new Date(date);
+                        observedDate.setDate(date.getDate() + 1);
+                        if (observedDate.getDate() === day + 1) return US_FEDERAL_HOLIDAYS[fixedDateKey];
+                    }
+                    return US_FEDERAL_HOLIDAYS[fixedDateKey];
+                }
+
+                // Check floating holidays
+                for (const key in US_FEDERAL_HOLIDAYS) {
+                    const holidayRule = US_FEDERAL_HOLIDAYS[key];
+                    if (typeof holidayRule === 'object' && holidayRule.month === month) {
+                        if (holidayRule.week === 'last') {
+                            const lastDayOfMonth = new Date(year, month + 1, 0); // Last day of current month
+                            let testDate = new Date(year, month, lastDayOfMonth.getDate());
+                            while (testDate.getDay() !== holidayRule.dayOfWeek) {
+                                testDate.setDate(testDate.getDate() - 1);
+                            }
+                            if (testDate.getDate() === day) return holidayRule.name;
+                        } else {
+                            let count = 0;
+                            for (let d = 1; d <= new Date(year, month + 1, 0).getDate(); d++) { // Corrected loop condition
+                                const testDate = new Date(year, month, d);
+                                if (testDate.getMonth() !== month) break; // Moved to next month
+                                if (testDate.getDay() === holidayRule.dayOfWeek) {
+                                    count++;
+                                    if (count === holidayRule.week) {
+                                        if (testDate.getDate() === day) {
+                                            return holidayRule.name;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return null; // Not a holiday
+            };
+
+            /**
+             * Formats a date string for display, including federal holidays or 'Today' for the first period.
+             * @param {string} dateString The ISO date string from the forecast data.
+             * @param {boolean} isFirstPeriod True if this is the very first period being displayed.
+             * @returns {string} The formatted date string.
+             */
+            const formatDate = (dateString, isFirstPeriod) => {
+                const date = new Date(dateString);
+                const now = new Date();
+                // Normalize dates to compare only day, month, year
+                const isToday = date.getDate() === now.getDate() &&
+                                date.getMonth() === now.getMonth() &&
+                                date.getFullYear() === now.getFullYear();
+
+                const holidayName = isFederalHoliday(date);
+
+                if (holidayName) {
+                    return holidayName; // If it's a holiday, return only the holiday name
+                } else if (isToday && isFirstPeriod) {
+                    return 'Today'; // If it's the first period and today, say 'Today'
+                } else {
+                    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                }
+            };
+
+            /**
+             * Helper function to parse numerical values, handling 'null' strings, empty strings, and NaN.
+             * @param {string} valueString The string value to parse.
+             * @returns {number|null} The parsed number, or null if invalid.
+             */
+            const parseNumericalValue = (valueString) => {
+                const trimmedValue = String(valueString).trim();
+                if (trimmedValue === 'null' || trimmedValue === '') {
+                    return null;
+                }
+                const parsed = parseFloat(trimmedValue);
+                return isNaN(parsed) ? null : parsed;
+            };
+
+            /**
+             * Fetches and parses DWML XML forecast data for a single location.
+             * @param {object} location The location object with name, lat, and lon.
+             * @returns {object|null} Parsed forecast data for the location, or null if fetch/parse fails.
+             */
+            async function fetchAndParseLocationForecast(location) {
+                const forecastUrl = `https://forecast.weather.gov/MapClick.php?lat=${location.lat}&lon=${location.lon}&unit=0&lg=english&FcstType=dwml`;
+                
+                try {
+                    const response = await fetch(forecastUrl);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const xmlText = await response.text();
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+
+                    if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
+                        console.error(`Error parsing XML for ${location.name}:`, xmlText);
+                        throw new Error(`Error parsing XML for ${location.name}. Invalid XML format.`);
+                    }
+
+                    const timeLayouts = {};
+                    xmlDoc.querySelectorAll('time-layout').forEach(layout => {
+                        const layoutKey = layout.querySelector('layout-key').textContent;
+                        const startTimes = Array.from(layout.querySelectorAll('start-valid-time')).map(t => t.textContent);
+                        const endTimes = Array.from(layout.querySelectorAll('end-valid-time')).map(t => t.textContent);
+                        const summaries = Array.from(layout.querySelectorAll('layout-summary')).map(s => s.textContent);
+                        timeLayouts[layoutKey] = { startTimes, endTimes, summaries };
+                    });
+
+                    const parameters = xmlDoc.querySelector('parameters');
+                    if (!parameters) {
+                        throw new Error(`Could not find forecast parameters in XML for ${location.name}.`);
+                    }
+
+                    const maxTemps = parameters.querySelector('temperature[type="maximum"]');
+                    const minTemps = parameters.querySelector('temperature[type="minimum"]');
+                    const maxTempValues = maxTemps ? Array.from(maxTemps.querySelectorAll('value')).map(v => v.textContent) : [];
+                    const minTempValues = minTemps ? Array.from(minTemps.querySelectorAll('value')).map(v => v.textContent) : [];
+                    const tempLayoutKey = maxTemps ? maxTemps.getAttribute('time-layout') : null;
+
+                    const weatherConditions = parameters.querySelector('weather');
+                    const weatherSummaries = weatherConditions ? Array.from(weatherConditions.querySelectorAll('weather-conditions')).map(wc => wc.getAttribute('weather-summary')) : [];
+                    const weatherLayoutKey = weatherConditions ? weatherConditions.getAttribute('time-layout') : null;
+
+                    const conditionsIcons = parameters.querySelector('conditions-icon');
+                    const iconLinks = conditionsIcons ? Array.from(conditionsIcons.querySelectorAll('icon-link')).map(il => il.textContent) : [];
+                    const iconLayoutKey = conditionsIcons ? conditionsIcons.getAttribute('time-layout') : null;
+                    
+                    const locationForecast = {
+                        name: location.name,
+                        periods: []
+                    };
+
+                    const numPeriods = timeLayouts[tempLayoutKey] ? timeLayouts[tempLayoutKey].startTimes.length : 0;
+
+                    for (let i = 0; i < numPeriods; i++) {
+                        const periodStartDate = timeLayouts[tempLayoutKey].startTimes[i];
+                        const periodEndDate = timeLayouts[tempLayoutKey].endTimes[i];
+
+                        const highTemp = parseNumericalValue(maxTempValues[i]);
+                        const lowTemp = parseNumericalValue(minTempValues[i]);
+                        
+                        let currentWeatherSummary = null;
+                        let currentIconLink = null;
+                        if (weatherLayoutKey) {
+                            const weatherIndex = timeLayouts[weatherLayoutKey].startTimes.findIndex(t => t === periodStartDate);
+                            if (weatherIndex !== -1) {
+                                currentWeatherSummary = weatherSummaries[weatherIndex] || null;
+                                currentIconLink = iconLinks[weatherIndex] || null;
+                            }
+                        }
+                        
+                        locationForecast.periods.push({
+                            summary: timeLayouts[tempLayoutKey].summaries[i],
+                            startDate: periodStartDate,
+                            endDate: periodEndDate,
+                            highTemp: highTemp,
+                            lowTemp: lowTemp,
+                            weatherSummary: currentWeatherSummary,
+                            iconLink: currentIconLink
+                        });
+                    }
+                    return locationForecast;
+                    
+                } catch (error) {
+                    console.error(`Failed to fetch or parse forecast for ${location.name}:`, error);
+                    // Return null on error so it doesn't halt the whole process
+                    return null; 
+                }
+            }
+
+            /**
+             * Compiles and displays the regional 6-day forecast by averaging data from multiple locations.
+             */
+            function compileAndDisplayRegionalForecast() {
+                if (allLocationsForecastData.length === 0) {
+                    console.warn("No forecast data collected to compile regional forecast.");
+                    errorText.textContent = "No forecast data could be loaded for any location.";
+                    errorMessage.classList.remove('hidden');
+                    return;
+                }
+
+                const regionalForecastPeriods = {}; // Key:YYYY-MM-DD, Value: { highs:[], lows:[], weatherSummaries:[], iconLinks:[], representativeSummary: null, representativeIconLink: null }
+
+                // Find Marion, IL's data for representative weather/icons
+                const marionForecastData = allLocationsForecastData.find(loc => loc.name === 'Marion, IL');
+                if (!marionForecastData) {
+                    console.warn("Marion, IL data not found for representative weather/icons. Falling back to first available location for summary/icon.");
+                }
+
+                // Aggregate data from all locations by calendar day
+                allLocationsForecastData.forEach(locData => {
+                    locData.periods.forEach(period => {
+                        const periodDate = new Date(period.startDate);
+                        const calendarDayKey = `${periodDate.getFullYear()}-${(periodDate.getMonth() + 1).toString().padStart(2, '0')}-${periodDate.getDate().toString().padStart(2, '0')}`;
+                        
+                        if (!regionalForecastPeriods[calendarDayKey]) {
+                            regionalForecastPeriods[calendarDayKey] = {
+                                highs: [],
+                                lows: [],
+                                weatherSummaries: [],
+                                iconLinks: [],
+                                representativeSummary: null, 
+                                representativeIconLink: null,
+                                startDate: period.startDate, // Will be the earliest start time for this day
+                                endDate: period.endDate // Will be the latest end time for this day
+                            };
+                        }
+
+                        // Collect all high and low temps for the day
+                        if (period.highTemp !== null) regionalForecastPeriods[calendarDayKey].highs.push(period.highTemp);
+                        if (period.lowTemp !== null) regionalForecastPeriods[calendarDayKey].lows.push(period.lowTemp);
+                        
+                        // Collect all weather summaries and icon links
+                        if (period.weatherSummaries !== null) regionalForecastPeriods[calendarDayKey].weatherSummaries.push(period.weatherSummaries);
+                        if (period.iconLinks !== null) regionalForecastPeriods[calendarDayKey].iconLinks.push(period.iconLinks);
+
+                        // Update overall start/end dates for the combined day
+                        if (new Date(period.startDate) < new Date(regionalForecastPeriods[calendarDayKey].startDate)) {
+                            regionalForecastPeriods[calendarDayKey].startDate = period.startDate;
+                        }
+                        if (new Date(period.endDate) > new Date(regionalForecastPeriods[calendarDayKey].endDate)) {
+                            regionalForecastPeriods[calendarDayKey].endDate = period.endDate;
+                        }
+
+                        // Logic to pick the best representative summary and icon for the day
+                        // Prioritize non-null, non-empty summaries.
+                        // If it's a "day" period (e.g., "Today", "Friday"), use its summary/icon.
+                        // Otherwise, just use the first one encountered (which is usually the first period of that day).
+                        const summaryLower = period.summary ? period.summary.toLowerCase() : '';
+                        const isDayPeriod = summaryLower.includes('day') || summaryLower.includes('today') || summaryLower.includes(new Date(period.startDate).toLocaleDateString('en-US', {weekday: 'long'}).toLowerCase());
+                        
+                        if (isDayPeriod && period.weatherSummary) {
+                            regionalForecastPeriods[calendarDayKey].representativeSummary = period.weatherSummary;
+                            regionalForecastPeriods[calendarDayKey].representativeIconLink = period.iconLink;
+                        } else if (!regionalForecastPeriods[calendarDayKey].representativeSummary && period.weatherSummary) {
+                            // If no representative summary chosen yet, take this one
+                            regionalForecastPeriods[calendarDayKey].representativeSummary = period.weatherSummary;
+                            regionalForecastPeriods[calendarDayKey].representativeIconLink = period.iconLink;
+                        }
+                    });
+                });
+
+                // Convert to an array and sort by start date to ensure chronological order
+                const sortedRegionalPeriods = Object.keys(regionalForecastPeriods)
+                    .map(key => {
+                        const period = regionalForecastPeriods[key];
+                        
+                        return {
+                            summary: period.summary, // This is the original summary from the first period, might be "Today" or "Tonight"
+                            startDate: period.startDate,
+                            endDate: period.endDate,
+                            avgHigh: period.highs.length > 0 ? Math.round(period.highs.reduce((a, b) => a + b, 0) / period.highs.length) : null,
+                            avgLow: period.lows.length > 0 ? Math.round(period.lows.reduce((a, b) => a + b, 0) / period.lows.length) : null,
+                            representativeWeatherSummary: period.representativeSummary || 'Mixed/Varying', // Use the chosen representative
+                            representativeIconLink: period.representativeIconLink || 'https://placehold.co/64x64/cccccc/000000?text=No+Icon'
+                        };
+                    })
+                    .sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+
+                // Display the regional forecast
+                let regionalHtml = `<h2 class="text-2xl font-bold text-blue-800 mb-6 text-center">6-Day Regional Forecast</h2>`;
+                // Adjusted grid classes for 3 columns on large screens and up
+                regionalHtml += `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">`; 
+
+                // Display up to 6 distinct calendar days
+                const numRegionalDaysToShow = 6; 
+                let displayedDaysCount = 0;
+
+                for (let i = 0; i < sortedRegionalPeriods.length && displayedDaysCount < numRegionalDaysToShow; i++) {
+                    const period = sortedRegionalPeriods[i];
+                    const avgHighDisplay = period.avgHigh !== null ? `${period.avgHigh}°F` : 'N/A';
+                    const avgLowDisplay = period.avgLow !== null ? `${period.avgLow}°F` : 'N/A';
+                    
+                    regionalHtml += `
+                        <div class="card p-4 rounded-lg shadow-sm flex flex-col items-center text-center">
+                            <h3 class="text-lg font-bold text-blue-700 mb-1">${formatDate(period.startDate, i === 0)}</h3>
+                            <p class="text-gray-600 text-xs mb-2">${period.summary || ''}</p>
+                            <img src="${period.representativeIconLink}" alt="${period.representativeWeatherSummary}" class="weather-icon w-12 h-12 mb-2">
+                            <p class="text-md font-semibold text-gray-800 mb-1">${period.representativeWeatherSummary}</p>
+                            <div class="flex justify-center items-baseline space-x-2">
+                                ${period.avgHigh !== null ? `<p class="text-red-500 text-lg font-bold">Avg H: ${avgHighDisplay}</p>` : ''}
+                                ${period.avgLow !== null ? `<p class="text-blue-500 text-lg font-bold">Avg L: ${avgLowDisplay}</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                    displayedDaysCount++;
+                }
+                regionalHtml += `</div>`; // Close inner grid
+
+                const regionalCard = document.createElement('div');
+                regionalCard.className = 'card regional-forecast-card p-6 rounded-lg shadow-lg flex flex-col';
+                regionalCard.innerHTML = regionalHtml;
+                forecastGrid.insertBefore(regionalCard, forecastGrid.firstChild); // Insert at the beginning
+            }
+
+
+            async function loadAllForecasts() {
+                loadingIndicator.classList.remove('hidden');
+                errorMessage.classList.add('hidden');
+                forecastContainer.classList.add('hidden');
+                forecastGrid.replaceChildren(); // Clear previous forecasts using replaceChildren
+                allLocationsForecastData.length = 0; // Clear collected data
+
+                let hasError = false;
+                // Fetch and parse data for all locations concurrently
+                const fetchPromises = locations.map(location => fetchAndParseLocationForecast(location));
+                const results = await Promise.all(fetchPromises);
+
+                results.forEach(result => {
+                    if (result) { // Only add if fetch and parse was successful
+                        allLocationsForecastData.push(result);
+                    } else {
+                        hasError = true; // Mark that at least one location failed
+                    }
+                });
+                
+                // After all individual forecasts are fetched and parsed, compile the regional one
+                compileAndDisplayRegionalForecast();
+
+                loadingIndicator.classList.add('hidden');
+                forecastContainer.classList.remove('hidden');
+
+                // Check if any error cards were added or if hasError flag is true
+                if (hasError || forecastGrid.querySelector('.error-card')) {
+                    errorText.textContent = "Some forecast data could not be loaded. Please check the console for details.";
+                    errorMessage.classList.remove('hidden');
+                }
+            }
+
+            loadAllForecasts();
+        });
+    </script>
+</body>
+</html>
