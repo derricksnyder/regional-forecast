@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"> <!-- Essential for responsive behavior on all devices -->
     <title>NWS Regional 6-Day Forecast Dashboard</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -37,8 +37,8 @@
             100% { transform: rotate(360deg); }
         }
         .weather-icon {
-            width: 64px; /* Adjust size as needed */
-            height: 64px;
+            width: 128px; /* Increased size for better visibility on mobile */
+            height: 128px; /* Increased size for better visibility on mobile */
             object-fit: contain;
         }
         .error-card {
@@ -58,7 +58,7 @@
         }
     </style>
 </head>
-<body class="min-h-screen flex flex-col items-center p-4">
+<body class="min-h-screen flex flex-col items-center p-4"> <!-- p-4 adds padding on all sides for mobile -->
 
     <div class="container mx-auto p-6 bg-blue-600 text-white rounded-lg shadow-lg mb-8 max-w-6xl text-center">
         <h1 class="text-3xl font-bold mb-2">NWS Regional 6-Day Forecast Dashboard</h1>
@@ -75,9 +75,15 @@
         <span class="block sm:inline" id="errorText"></span>
     </div>
 
-    <div id="forecastContainer" class="hidden w-full max-w-6xl">
+    <div id="forecastContainer" class="hidden w-full max-w-6xl"> <!-- w-full ensures it takes full width on mobile -->
         <div id="forecastGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            </div>
+            <!--
+                grid-cols-1: On smallest screens, items will stack in a single column.
+                md:grid-cols-2: On medium screens (768px and up), items will arrange into 2 columns.
+                lg:grid-cols-3: On large screens (1024px and up), items will arrange into 3 columns.
+                xl:grid-cols-4: On extra-large screens (1280px and up), items will arrange into 4 columns.
+            -->
+        </div>
     </div>
 
     <script>
@@ -346,12 +352,12 @@
                             regionalForecastPeriods[calendarDayKey] = {
                                 highs: [],
                                 lows: [],
-                                weatherSummaries: [],
-                                iconLinks: [],
+                                weatherSummaries: [], // Will store all weather summaries for this day
+                                iconLinks: [],       // Will store all icon links for this day
                                 representativeSummary: null, 
                                 representativeIconLink: null,
-                                startDate: period.startDate, // Will be the earliest start time for this day
-                                endDate: period.endDate // Will be the latest end time for this day
+                                startDate: period.startDate, 
+                                endDate: period.endDate 
                             };
                         }
 
@@ -359,9 +365,13 @@
                         if (period.highTemp !== null) regionalForecastPeriods[calendarDayKey].highs.push(period.highTemp);
                         if (period.lowTemp !== null) regionalForecastPeriods[calendarDayKey].lows.push(period.lowTemp);
                         
-                        // Collect all weather summaries and icon links
-                        if (period.weatherSummaries !== null) regionalForecastPeriods[calendarDayKey].weatherSummaries.push(period.weatherSummaries);
-                        if (period.iconLinks !== null) regionalForecastPeriods[calendarDayKey].iconLinks.push(period.iconLinks);
+                        // Correctly collect all weather summaries and icon links
+                        if (period.weatherSummary && period.weatherSummary.trim() !== '') {
+                            regionalForecastPeriods[calendarDayKey].weatherSummaries.push(period.weatherSummary);
+                        }
+                        if (period.iconLink && period.iconLink.trim() !== '') {
+                            regionalForecastPeriods[calendarDayKey].iconLinks.push(period.iconLink);
+                        }
 
                         // Update overall start/end dates for the combined day
                         if (new Date(period.startDate) < new Date(regionalForecastPeriods[calendarDayKey].startDate)) {
@@ -369,22 +379,6 @@
                         }
                         if (new Date(period.endDate) > new Date(regionalForecastPeriods[calendarDayKey].endDate)) {
                             regionalForecastPeriods[calendarDayKey].endDate = period.endDate;
-                        }
-
-                        // Logic to pick the best representative summary and icon for the day
-                        // Prioritize non-null, non-empty summaries.
-                        // If it's a "day" period (e.g., "Today", "Friday"), use its summary/icon.
-                        // Otherwise, just use the first one encountered (which is usually the first period of that day).
-                        const summaryLower = period.summary ? period.summary.toLowerCase() : '';
-                        const isDayPeriod = summaryLower.includes('day') || summaryLower.includes('today') || summaryLower.includes(new Date(period.startDate).toLocaleDateString('en-US', {weekday: 'long'}).toLowerCase());
-                        
-                        if (isDayPeriod && period.weatherSummary) {
-                            regionalForecastPeriods[calendarDayKey].representativeSummary = period.weatherSummary;
-                            regionalForecastPeriods[calendarDayKey].representativeIconLink = period.iconLink;
-                        } else if (!regionalForecastPeriods[calendarDayKey].representativeSummary && period.weatherSummary) {
-                            // If no representative summary chosen yet, take this one
-                            regionalForecastPeriods[calendarDayKey].representativeSummary = period.weatherSummary;
-                            regionalForecastPeriods[calendarDayKey].representativeIconLink = period.iconLink;
                         }
                     });
                 });
@@ -394,21 +388,25 @@
                     .map(key => {
                         const period = regionalForecastPeriods[key];
                         
+                        // Determine representative weather summary and icon link
+                        // Prioritize non-empty summaries/icons
+                        const representativeSummary = period.weatherSummaries.find(s => s && s.trim() !== '') || 'Mixed/Varying';
+                        const representativeIconLink = period.iconLinks.find(link => link && link.trim() !== '') || 'https://placehold.co/128x128/cccccc/000000?text=No+Icon';
+
                         return {
-                            summary: period.summary, // This is the original summary from the first period, might be "Today" or "Tonight"
+                            summary: period.summary, 
                             startDate: period.startDate,
                             endDate: period.endDate,
                             avgHigh: period.highs.length > 0 ? Math.round(period.highs.reduce((a, b) => a + b, 0) / period.highs.length) : null,
                             avgLow: period.lows.length > 0 ? Math.round(period.lows.reduce((a, b) => a + b, 0) / period.lows.length) : null,
-                            representativeWeatherSummary: period.representativeSummary || 'Mixed/Varying', // Use the chosen representative
-                            representativeIconLink: period.representativeIconLink || 'https://placehold.co/64x64/cccccc/000000?text=No+Icon'
+                            representativeWeatherSummary: representativeSummary, 
+                            representativeIconLink: representativeIconLink
                         };
                     })
                     .sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
 
                 // Display the regional forecast
                 let regionalHtml = `<h2 class="text-2xl font-bold text-blue-800 mb-6 text-center">6-Day Regional Forecast</h2>`;
-                // Adjusted grid classes for 3 columns on large screens and up
                 regionalHtml += `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">`; 
 
                 // Display up to 6 distinct calendar days
@@ -424,7 +422,7 @@
                         <div class="card p-4 rounded-lg shadow-sm flex flex-col items-center text-center">
                             <h3 class="text-lg font-bold text-blue-700 mb-1">${formatDate(period.startDate, i === 0)}</h3>
                             <p class="text-gray-600 text-xs mb-2">${period.summary || ''}</p>
-                            <img src="${period.representativeIconLink}" alt="${period.representativeWeatherSummary}" class="weather-icon w-12 h-12 mb-2">
+                            <img src="${period.representativeIconLink}" alt="${period.representativeWeatherSummary}" class="weather-icon mb-2"> <!-- Removed w-12 h-12 here -->
                             <p class="text-md font-semibold text-gray-800 mb-1">${period.representativeWeatherSummary}</p>
                             <div class="flex justify-center items-baseline space-x-2">
                                 ${period.avgHigh !== null ? `<p class="text-red-500 text-lg font-bold">Avg H: ${avgHighDisplay}</p>` : ''}
