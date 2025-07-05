@@ -71,6 +71,6 @@ This project is open-source and uses publicly available data from the U.S. Natio
 
 ## 👨‍💻 Author
 
-Built by [Your Name or GitHub handle]  
+Built by Derrick Snyder
 Feel free to suggest improvements or open issues!
 
