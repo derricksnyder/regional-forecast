@@ -4,7 +4,7 @@ This project displays a regional 6-day weather forecast averaged from several ke
 
 ## 🌐 Live Demo
 
-👉 [View the dashboard here](https://derrick.snyder.github.io/regional-forecast/)  
+👉 [View the dashboard here](https://derricksnyder.github.io/regional-forecast/)  
 *(Replace `yourusername` with your actual GitHub username once deployed.)*
 
 ---
